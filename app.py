@@ -7,6 +7,31 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 st.set_page_config(page_title="유창강건 마감 킬러", layout="wide")
 st.title("📊 유창강건 세금계산서 누락 체크기")
+
+def read_excel_any(file):
+    """xls/xlsx/csv 어떤 형식이든 읽기"""
+    file.seek(0)
+    raw = file.read()
+    # 1) EUC-KR 텍스트(xls 위장 CSV) 시도
+    try:
+        text = raw.decode('euc-kr')
+        lines = text.strip().replace('\r\n', '\n').split('\n')
+        return pd.DataFrame({0: lines})
+    except:
+        pass
+    # 2) xlrd (구형 xls)
+    try:
+        file.seek(0)
+        return pd.read_excel(file, header=None, engine='xlrd')
+    except:
+        pass
+    # 3) openpyxl (xlsx)
+    try:
+        file.seek(0)
+        return pd.read_excel(file, header=None, engine='openpyxl')
+    except:
+        pass
+    raise ValueError("파일을 읽을 수 없습니다.")
 st.info("물품출고(ERP), 카드매출, 세금계산서 발행목록을 대조합니다.")
 
 # ── 이름 정제 함수 ──────────────────────────────────────────
