@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import re
-from io import BytesIO
+from io import BytesIO, StringIO
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
@@ -10,29 +10,6 @@ st.title("📊 유창강건 세금계산서 누락 체크기")
 st.info("물품출고(ERP), 카드매출, 세금계산서 발행목록을 대조합니다.")
 
 # ── 공통 함수 ────────────────────────────────────────────────
-def read_excel_any(file):
-    """파일 시그니처로 형식 판별 후 읽기"""
-    file.seek(0)
-    raw = file.read()
-
-    is_xlsx = raw[:2] == b'PK'                                      # xlsx = zip
-    is_xls  = raw[:8] == b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1'      # xls = OLE2
-
-    if is_xlsx:
-        file.seek(0)
-        return pd.read_excel(file, header=None, engine='openpyxl')
-    elif is_xls:
-        file.seek(0)
-        return pd.read_excel(file, header=None, engine='xlrd')
-    else:
-        # EUC-KR 텍스트 (ERP xls 위장 CSV)
-        try:
-            text = raw.decode('euc-kr')
-        except Exception:
-            text = raw.decode('utf-8', errors='ignore')
-        lines = text.strip().replace('\r\n', '\n').split('\n')
-        return pd.DataFrame({0: lines})
-
 def clean(x):
     x = str(x)
     x = re.sub(r'[■▲▶●★☆□△◆◇]', '', x)
@@ -48,11 +25,29 @@ def is_number(s):
     except:
         return False
 
+def read_as_xls_ole(file):
+    """OLE2 .xls 파일 읽기 (xlrd)"""
+    file.seek(0)
+    return pd.read_excel(file, header=None, engine='xlrd')
+
+def read_as_xlsx(file):
+    """xlsx 파일 읽기 (openpyxl)"""
+    file.seek(0)
+    return pd.read_excel(file, header=None, engine='openpyxl')
+
+def read_erp(file):
+    """ERP 물품출고 파일: CP949 인코딩 TSV"""
+    file.seek(0)
+    raw = file.read()
+    text = raw.decode('cp949')
+    df = pd.read_csv(StringIO(text), sep='\t', header=0, on_bad_lines='skip')
+    return df
+
 # ── 파일 업로드 ─────────────────────────────────────────────
 col1, col2, col3 = st.columns(3)
 with col1:
     st.markdown("#### 1️⃣ 물품출고(ERP)")
-    st.caption("거래처명이 한 열에 있는 xls/xlsx/csv")
+    st.caption("유창강건 ERP에서 내보낸 xls")
     file_out = st.file_uploader("ERP 파일", type=['xlsx','xls','csv'], label_visibility="collapsed")
 with col2:
     st.markdown("#### 2️⃣ 카드매출 비교")
@@ -60,7 +55,7 @@ with col2:
     file_card = st.file_uploader("카드매출 파일", type=['xlsx','xls','csv'], label_visibility="collapsed")
 with col3:
     st.markdown("#### 3️⃣ 세금계산서 발행목록")
-    st.caption("국세청 전자세금계산서 목록")
+    st.caption("국세청 전자세금계산서 목록 xls")
     file_tax = st.file_uploader("세금계산서 파일", type=['xlsx','xls','csv'], label_visibility="collapsed")
 
 # ── 분석 ────────────────────────────────────────────────────
@@ -71,35 +66,49 @@ if st.button("🚀 미발행 업체 분석 시작", type="primary", use_containe
 
     with st.spinner("분석 중..."):
         try:
-            # ── 1. ERP 물품출고 ───────────────────────────────
-            df_erp = read_excel_any(file_out)
+            # ── 1. ERP 물품출고 (CP949 TSV) ──────────────────
+            df_erp = read_erp(file_out)
+
+            # '거래처명' 컬럼 찾기
+            if '거래처명' in df_erp.columns:
+                col_name = '거래처명'
+            else:
+                # 혹시 컬럼명이 다르면 3번째 열(index 3) 사용
+                col_name = df_erp.columns[3]
+
             erp_names = set()
             original_map = {}
-            for val in df_erp.iloc[:, 0].dropna():
-                v = str(val).strip().strip('"')
+            for v in df_erp[col_name].dropna():
+                v = str(v).strip().strip('"')
                 if v and not is_number(v):
                     k = clean(v)
                     erp_names.add(k)
                     original_map[k] = v
 
-            # ── 2. 카드매출 ───────────────────────────────────
-            df_card = read_excel_any(file_card)
+            # ── 2. 카드매출 (xlsx) ────────────────────────────
+            df_card = read_as_xlsx(file_card)
             card_names = set()
-            for val in df_card.iloc[3:, 0].dropna():   # row 0~2 헤더
-                v = clean(str(val))
-                if v:
-                    card_names.add(v)
+            for v in df_card.iloc[3:, 0].dropna():   # row 0~2 = 헤더
+                k = clean(str(v))
+                if k:
+                    card_names.add(k)
 
-            # ── 3. 세금계산서 ─────────────────────────────────
-            df_tax = read_excel_any(file_tax)
+            # ── 3. 세금계산서 (OLE2 xls) ─────────────────────
+            # xlrd로 읽기 시도, 안되면 LibreOffice 변환 후 openpyxl
+            try:
+                df_tax = read_as_xls_ole(file_tax)
+            except Exception:
+                # xlrd 실패시 openpyxl 시도 (xlsx로 저장된 경우)
+                df_tax = read_as_xlsx(file_tax)
+
             tax_names = set()
-            for val in df_tax.iloc[6:, 11].dropna():   # 공급받는자 상호
-                tax_names.add(clean(str(val)))
+            for v in df_tax.iloc[6:, 11].dropna():   # 공급받는자 상호 = col 11
+                tax_names.add(clean(str(v)))
 
             # ── 4. 비교 ───────────────────────────────────────
             target = erp_names - card_names
             missing_keys = target - tax_names
-            skip_keywords = ['기타거래처', '현금영수증', '카드매출', '거래처명']
+            skip_keywords = ['기타거래처', '현금영수증', '카드매출', '거래처명', '거래처ID']
             missing_display = sorted([
                 original_map.get(k, k) for k in missing_keys
                 if not any(kw in original_map.get(k, k) for kw in skip_keywords)
@@ -107,6 +116,8 @@ if st.button("🚀 미발행 업체 분석 시작", type="primary", use_containe
 
         except Exception as e:
             st.error(f"❌ 오류: {e}")
+            import traceback
+            st.code(traceback.format_exc())
             st.stop()
 
     # ── 결과 ─────────────────────────────────────────────────
