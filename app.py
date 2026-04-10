@@ -197,9 +197,27 @@ if st.button("🚀 미발행 업체 분석 시작", type="primary", use_containe
                 "세금계산서 공급가액":fmt(r["세금계산서_공급가액"]),"세금계산서 세액":fmt(r["세금계산서_세액"]),"세금계산서 합계":fmt(r["세금계산서_합계"]),
                 "차이(공급가액)":fmt(r["차이_공급가액"]),"차이(부가세)":fmt(r["차이_부가세"]),"차이(합계)":fmt(r["차이_합계"])}
                 for i,r in enumerate(amount_rows)])
-            st.dataframe(df_a.style.apply(lambda row: ['background-color:#ffe0e0']*len(row), axis=1),
+
+            # 컬럼별 색상 구분
+            col_colors = {
+                "No.":              "#F5F5F5",
+                "업체명":            "#E8F4FD",  # 연파랑
+                "ERP 공급가액":      "#FFF3E0",  # 연주황
+                "ERP 부가세":        "#FFF3E0",
+                "ERP 합계":          "#FFE0B2",  # 주황 (조금 진하게)
+                "세금계산서 공급가액": "#F3E5F5",  # 연보라
+                "세금계산서 세액":    "#F3E5F5",
+                "세금계산서 합계":    "#E1BEE7",  # 보라 (조금 진하게)
+                "차이(공급가액)":     "#FCE4EC",  # 연빨강
+                "차이(부가세)":       "#FCE4EC",
+                "차이(합계)":         "#EF9A9A",  # 빨강 (진하게)
+            }
+            def hl_amt_cols(row):
+                return [f"background-color:{col_colors.get(col, '#FFFFFF')}" for col in row.index]
+
+            st.dataframe(df_a.style.apply(hl_amt_cols, axis=1),
                          use_container_width=True, hide_index=True)
-            st.caption("차이 양수 = ERP가 더 큼(추가발행필요) | 음수 = 세금계산서가 더 큼")
+            st.caption("🔵 업체명  🟠 ERP  🟣 세금계산서  🔴 차이  |  차이 양수 = ERP가 더 큼(추가발행필요) | 음수 = 세금계산서가 더 큼")
         else:
             st.success("🎉 금액 모두 일치!")
 
