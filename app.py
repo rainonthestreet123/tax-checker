@@ -25,24 +25,6 @@ def is_number(s):
     except:
         return False
 
-def read_as_xls_ole(file):
-    """OLE2 .xls 파일 읽기 (xlrd)"""
-    file.seek(0)
-    return pd.read_excel(file, header=None, engine='xlrd')
-
-def read_as_xlsx(file):
-    """xlsx 파일 읽기 (openpyxl)"""
-    file.seek(0)
-    return pd.read_excel(file, header=None, engine='openpyxl')
-
-def read_erp(file):
-    """ERP 물품출고 파일: CP949 인코딩 TSV"""
-    file.seek(0)
-    raw = file.read()
-    text = raw.decode('cp949')
-    df = pd.read_csv(StringIO(text), sep='\t', header=0, on_bad_lines='skip')
-    return df
-
 # ── 파일 업로드 ─────────────────────────────────────────────
 col1, col2, col3 = st.columns(3)
 with col1:
@@ -51,31 +33,47 @@ with col1:
     file_out = st.file_uploader("ERP 파일", type=['xlsx','xls','csv'], label_visibility="collapsed")
 with col2:
     st.markdown("#### 2️⃣ 카드매출 비교")
-    st.caption("A열에 거래처명이 있는 xlsx")
+    st.caption("월별 시트가 있는 xlsx")
     file_card = st.file_uploader("카드매출 파일", type=['xlsx','xls','csv'], label_visibility="collapsed")
 with col3:
     st.markdown("#### 3️⃣ 세금계산서 발행목록")
     st.caption("국세청 전자세금계산서 목록 xls")
     file_tax = st.file_uploader("세금계산서 파일", type=['xlsx','xls','csv'], label_visibility="collapsed")
 
+# ── 카드매출 시트 선택 ───────────────────────────────────────
+selected_sheet = None
+if file_card:
+    try:
+        file_card.seek(0)
+        sheet_names = pd.ExcelFile(file_card, engine='openpyxl').sheet_names
+        selected_sheet = st.selectbox(
+            "📅 카드매출 분석 월 선택",
+            options=sheet_names,
+            index=0,
+            help="세금계산서와 대조할 월을 선택하세요"
+        )
+        st.caption(f"선택된 시트: **{selected_sheet}**")
+    except Exception as e:
+        st.error(f"카드매출 파일 시트 읽기 오류: {e}")
+
 # ── 분석 ────────────────────────────────────────────────────
 if st.button("🚀 미발행 업체 분석 시작", type="primary", use_container_width=True):
     if not (file_out and file_card and file_tax):
         st.warning("⚠️ 파일 3개를 모두 올려주세요.")
         st.stop()
+    if not selected_sheet:
+        st.warning("⚠️ 카드매출 월을 선택해주세요.")
+        st.stop()
 
     with st.spinner("분석 중..."):
         try:
             # ── 1. ERP 물품출고 (CP949 TSV) ──────────────────
-            df_erp = read_erp(file_out)
+            file_out.seek(0)
+            raw = file_out.read()
+            text = raw.decode('cp949')
+            df_erp = pd.read_csv(StringIO(text), sep='\t', header=0, on_bad_lines='skip')
 
-            # '거래처명' 컬럼 찾기
-            if '거래처명' in df_erp.columns:
-                col_name = '거래처명'
-            else:
-                # 혹시 컬럼명이 다르면 3번째 열(index 3) 사용
-                col_name = df_erp.columns[3]
-
+            col_name = '거래처명' if '거래처명' in df_erp.columns else df_erp.columns[3]
             erp_names = set()
             original_map = {}
             for v in df_erp[col_name].dropna():
@@ -85,24 +83,27 @@ if st.button("🚀 미발행 업체 분석 시작", type="primary", use_containe
                     erp_names.add(k)
                     original_map[k] = v
 
-            # ── 2. 카드매출 (xlsx) ────────────────────────────
-            df_card = read_as_xlsx(file_card)
+            # ── 2. 카드매출 (선택한 월 시트만) ───────────────
+            file_card.seek(0)
+            df_card = pd.read_excel(file_card, sheet_name=selected_sheet, header=None, engine='openpyxl')
             card_names = set()
-            for v in df_card.iloc[3:, 0].dropna():   # row 0~2 = 헤더
+            for v in df_card.iloc[3:, 0].dropna():
                 k = clean(str(v))
                 if k:
                     card_names.add(k)
 
-            # ── 3. 세금계산서 (OLE2 xls) ─────────────────────
-            # xlrd로 읽기 시도, 안되면 LibreOffice 변환 후 openpyxl
-            try:
-                df_tax = read_as_xls_ole(file_tax)
-            except Exception:
-                # xlrd 실패시 openpyxl 시도 (xlsx로 저장된 경우)
-                df_tax = read_as_xlsx(file_tax)
+            # ── 3. 세금계산서 (OLE2 xls or xlsx) ─────────────
+            file_tax.seek(0)
+            raw_tax = file_tax.read()
+            is_xls = raw_tax[:8] == b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1'
+            file_tax.seek(0)
+            if is_xls:
+                df_tax = pd.read_excel(file_tax, header=None, engine='xlrd')
+            else:
+                df_tax = pd.read_excel(file_tax, header=None, engine='openpyxl')
 
             tax_names = set()
-            for v in df_tax.iloc[6:, 11].dropna():   # 공급받는자 상호 = col 11
+            for v in df_tax.iloc[6:, 11].dropna():
                 tax_names.add(clean(str(v)))
 
             # ── 4. 비교 ───────────────────────────────────────
@@ -123,13 +124,13 @@ if st.button("🚀 미발행 업체 분석 시작", type="primary", use_containe
     # ── 결과 ─────────────────────────────────────────────────
     st.divider()
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("전체 매출 업체",    f"{len(erp_names)}개")
-    m2.metric("카드매출 업체",     f"{len(card_names)}개")
-    m3.metric("세금계산서 발행",   f"{len(tax_names)}개")
-    m4.metric("⚠️ 미발행 업체",   f"{len(missing_display)}개",
+    m1.metric("전체 매출 업체",         f"{len(erp_names)}개")
+    m2.metric(f"카드매출 ({selected_sheet})", f"{len(card_names)}개")
+    m3.metric("세금계산서 발행",         f"{len(tax_names)}개")
+    m4.metric("⚠️ 미발행 업체",         f"{len(missing_display)}개",
               delta=f"-{len(missing_display)}", delta_color="inverse")
 
-    st.subheader(f"✅ 세금계산서 미발행 업체 ({len(missing_display)}개)")
+    st.subheader(f"✅ [{selected_sheet}] 세금계산서 미발행 업체 ({len(missing_display)}개)")
 
     if missing_display:
         df_result = pd.DataFrame({
@@ -144,7 +145,7 @@ if st.button("🚀 미발행 업체 분석 시작", type="primary", use_containe
         ws.title = "미발행업체"
         border = Border(left=Side(style='thin'), right=Side(style='thin'),
                         top=Side(style='thin'),  bottom=Side(style='thin'))
-        ws['A1'] = '세금계산서 미발행 업체 목록'
+        ws['A1'] = f'세금계산서 미발행 업체 목록 ({selected_sheet})'
         ws['A1'].font = Font(bold=True, size=14, name="맑은 고딕")
         ws.merge_cells('A1:B1')
         ws['A2'] = f'미발행: {len(missing_display)}개'
@@ -176,7 +177,7 @@ if st.button("🚀 미발행 업체 분석 시작", type="primary", use_containe
         st.download_button(
             "⬇️ 미발행 업체 엑셀 다운로드",
             data=buf,
-            file_name="미발행업체.xlsx",
+            file_name=f"미발행업체_{selected_sheet}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
             type="primary"
