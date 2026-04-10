@@ -155,7 +155,9 @@ if st.button("🚀 미발행 업체 분석 시작", type="primary", use_containe
                 orig = original_map.get(k,k)
                 e_공급,e_부가,e_합계 = erp_공급가액.get(k,0), erp_부가세.get(k,0), erp_합계금액.get(k,0)
                 t_공급,t_세액,t_합계 = tax_공급가액.get(k,0), tax_세액.get(k,0),   tax_합계금액.get(k,0)
-                d_공급,d_부가,d_합계 = e_공급-t_공급, e_부가-t_세액, e_합계-t_합계
+                d_공급 = e_공급-t_공급
+                d_부가 = e_부가-t_세액
+                d_합계 = d_공급 + d_부가
                 if d_공급!=0 or d_부가!=0 or d_합계!=0:
                     amount_rows.append({"업체명":orig,
                         "ERP_공급가액":e_공급,"ERP_부가세":e_부가,"ERP_합계":e_합계,
