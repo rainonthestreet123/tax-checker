@@ -112,8 +112,8 @@ if st.button("🚀 미발행 업체 분석 시작", type="primary", use_containe
             # ── 1. 매출대장 (CP949 TSV) ───────────────────────
             df_출고 = read_tsv_cp949(st.session_state['매출대장'])
             df_출고['_key']    = df_출고['거래처'].apply(lambda x: clean(str(x)))
-            df_출고['_공급가액'] = df_출고['공급가액_품목'].apply(to_num)
-            df_출고['_부가세']   = df_출고['부가세_품목'].apply(to_num)
+            df_출고['_공급가액'] = df_출고['공급가액+운송'].apply(to_num)
+            df_출고['_부가세'] = (df_출고['부가세_품목'].apply(to_num) + df_출고['운송비(부가세)'].apply(to_num))
             df_출고['_합계']     = df_출고['금액'].apply(to_num)
 
             출고_names = set()
